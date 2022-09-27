@@ -3,7 +3,6 @@ const { getMainDomain } = require("../services/utils");
 const semrush = (req, res) => {
     let domain = req.headers["host"];
     let { prefix } = req.query;
-    prefix = prefix.split("/")[0];
     res.cookie("prefix", prefix, {
         path: "/",
         domain: process.env.NODE_ENV === "development" ? undefined : getMainDomain(domain)
