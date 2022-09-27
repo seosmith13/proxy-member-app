@@ -190,61 +190,66 @@ const semrushLimitMiddleware = async (req, res) => {
         let { id, username, isAdmin } = req.user;
         let { wpSite } = req;
         if (
-            !isAdmin &&
-            req.method.toUpperCase() == "POST" &&
-            !Array.isArray(req.body) && 
-            req.body.method == "dpa.IsRootDomain" && 
-            req.body.params.report == "domain.overview"
+            !isAdmin && 
+            /\/analytics\/overview\//.test(req.originalUrl)
         ) {
             const total = await domainOverviewModel.countRequests(id, username, wpSite, "semrush");
             const limit = await settingModel.getOverviewLimit("semrushDomainOverviewLimit");
             if (total > limit) {
                 return {
                     next: false,
-                    data: {
-                        error: {
-                            code: "-1",
-                            message: "Your daily limit is reached."
-                        }
-                    }
-                };
-            } else {
-                await domainOverviewModel.create({
-                    userId: id,
-                    username: username,
-                    site: wpSite,
-                    proxyType: "semrush",
-                    domain: req.body.params.args.searchItem
-                });
+                    type: "html",
+                    data: `<div class="text-center text-danger">Your daily limit is reached.</div>`
+                }              
             }
+        } else if (
+            !isAdmin &&
+            /\/dpa\/rpc/.test(req.originUrl) &&
+            typeof req.body == "object" &&
+            typeof req.body.params == "object" &&
+            req.body.method == "dpa.IsRootDomain" &&
+            req.body.params.report == "domain.overview"
+        ) {
+            await domainOverviewModel.create({
+                userId: id,
+                username: username,
+                site: wpSite,
+                proxyType: "semrush",
+                domain: req.body.params.args.searchItem
+            });
         }
-    
         if (
             !isAdmin &&
-            req.method.toUpperCase() == "POST" &&
-            req.url.includes("/kwogw/rpc") &&
-            req.body.method == "keywords.GetInfo" 
+            (
+                /\/analytics\/keywordoverview\//.test(req.originalUrl) || 
+                /\/analytics\/keywordmagic\//.test(req.originalUrl)
+            )
         ) {
             const total = await keywordOverviewModel.countRequests(id, username, wpSite, "semrush");
             const limit = await settingModel.getOverviewLimit("semrushKeywordOverviewLimit");
             if (total > limit) {
                 return {
                     next: false,
-                    data: {
-                        jsonrpc: "2.0",
-                        error: { code: -32004, message: "Your daily limit is reached.", data: null },
-                        id: 1
-                    }
-                }
-            } else {
-                await keywordOverviewModel.create({
-                    userId: id,
-                    username: username,
-                    site: wpSite,
-                    proxyType: "semrush",
-                    phases: req.body.params.phrases
-                });
+                    type: "html",
+                    data: `<div class="text-center text-danger">Your daily limit is reached.</div>`
+                }     
             }
+        } else if (
+            !isAdmin &&
+            req.method.toUpperCase() == "POST" &&
+            typeof req.body == "object" &&
+            (
+                (/\/kwogw\/rpc/.test(req.originalUrl) && req.body.method == "fts.GetKeywords") ||
+                (/\/kmtgw\/rpc/.test(req.originalUrl) && req.body.method == "fts.GetKeywords")
+            ) && req.body.id == 5
+        ) {
+            await keywordOverviewModel.create({
+                userId: id,
+                username: username,
+                site: wpSite,
+                proxyType: "semrush",
+                phases: [req.body.params.phrase]
+            });
         }
     }
     return {
@@ -334,7 +339,11 @@ const spyfuLimitMiddleware = async (req, res, next) => {
                 path: "/"
             }
         }
-        if (isAdmin && /\/Endpoints\/Search\/JsonSearch/.test(req.originalUrl) && req.query.isSiteQuery == "true") {
+        if (
+            !isAdmin &&
+            /\/Endpoints\/Search\/JsonSearch/.test(req.originalUrl) &&
+            req.query.isSiteQuery == "true"
+        ) {
             const total = await domainOverviewModel.countRequests(id, username, wpSite, "spyfu");
             const limit = await settingModel.getOverviewLimit("spyfuDomainOverviewLimit");
             if (total > limit) {
@@ -359,7 +368,11 @@ const spyfuLimitMiddleware = async (req, res, next) => {
                 });
             }
         }
-        if (isAdmin && /\/Endpoints\/Search\/JsonSearch/.test(req.originalUrl) && req.query.isSiteQuery == "false") {
+        if (
+            !isAdmin &&
+            /\/Endpoints\/Search\/JsonSearch/.test(req.originalUrl) && 
+            req.query.isSiteQuery == "false"
+        ) {
             const total = await keywordOverviewModel.countRequests(id, username, wpSite, "spyfu");
             const limit = await settingModel.getOverviewLimit("spyfuKeywordOverviewLimit");
             if (total > limit) {
@@ -384,7 +397,6 @@ const spyfuLimitMiddleware = async (req, res, next) => {
                 });
             }
         }
-
     }
     return {
         next: true
@@ -394,6 +406,10 @@ const spyfuLimitMiddleware = async (req, res, next) => {
 const applyMiddleware = async (req, res, next) => {
     let domain = req.headers["host"];
     let setting = await settingModel.findOne();
+    req.proxy = {
+        prefix: "www",
+        cookie: setting["semrushCookie"]
+    }
     let proxy = await proxyModel.findOne({domain});
     if (proxy !== null) {
         if (setting != null) {
@@ -407,7 +423,11 @@ const applyMiddleware = async (req, res, next) => {
                 if (result.next) {
                     return semrushMiddleware(prefix)(req, res, next);
                 } else {
-                    return res.json(result.data);
+                    if (result.type == "json") {
+                        return res.json(result.data);
+                    } else {
+                        return res.send(result.data);
+                    }
                 }
             } else if (proxy.type == "spyfu") {
                 let result = await spyfuLimitMiddleware(req, res);
